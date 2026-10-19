@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Giám Sát Điện Mặt Trời - Python Flask</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 font-sans min-h-screen p-4 md:p-6">
+    <div class="max-w-7xl mx-auto space-y-6">
+        
+        <!-- Header -->
+        <header class="flex flex-col md:flex-row justify-between items-center bg-slate-800/80 p-4 rounded-xl border border-slate-700 backdrop-blur shadow-lg">
+            <div class="flex items-center space-x-3 mb-3 md:mb-0">
+                <i class="fa-solid fa-solar-panel text-amber-400 text-3xl"></i>
+                <div>
+                    <h1 class="text-xl font-bold text-white">Giám Sát & Điều Khiển Điện Mặt Trời</h1>
+                    <p class="text-xs text-slate-400">Hệ thống IoT Python Flask + ESP32</p>
+                </div>
+            </div>
+            <div class="flex items-center space-x-3">
+                <span id="status-badge" class="flex items-center space-x-2 px-3 py-1 rounded-full text-xs font-semibold bg-red-500/20 text-red-400 border border-red-500/30">
+                    <span id="status-dot" class="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse"></span>
+                    <span id="status-text">Đang kết nối Server...</span>
+                </span>
+            </div>
+        </header>
+
+        <!-- KPI Cards Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            
+            <!-- Card 1: Tấm Pin Mặt Trời -->
+            <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/80 shadow-md">
+                <div class="flex justify-between items-center mb-3">
+                    <span class="text-sm font-semibold text-amber-400 uppercase tracking-wider">Tấm Pin Mặt Trời (PV)</span>
+                    <i class="fa-solid fa-sun text-amber-400 text-xl"></i>
+                </div>
+                <div class="text-3xl font-extrabold text-white mb-2">
+                    <span id="pv-power">0.0</span> <span class="text-lg font-normal text-slate-400">W</span>
+                </div>
+                <div class="flex justify-between text-xs text-slate-400 border-t border-slate-700/60 pt-3">
+                    <span>Điện áp: <strong id="pv-volt" class="text-slate-200">0.0 V</strong></span>
+                    <span>Dòng điện: <strong id="pv-curr" class="text-slate-200">0.0 A</strong></span>
+                </div>
+            </div>
+
+            <!-- Card 2: Sạc Ắc Quy -->
+            <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/80 shadow-md">
+                <div class="flex justify-between items-center mb-3">
+                    <span class="text-sm font-semibold text-emerald-400 uppercase tracking-wider">Vào Ắc Quy Lưu Trữ</span>
+                    <i class="fa-solid fa-battery-three-quarters text-emerald-400 text-xl"></i>
+                </div>
+                <div class="text-3xl font-extrabold text-white mb-2">
+                    <span id="bat-power">0.0</span> <span class="text-lg font-normal text-slate-400">W</span>
+                </div>
+                <div class="flex justify-between text-xs text-slate-400 border-t border-slate-700/60 pt-3">
+                    <span>Điện áp: <strong id="bat-volt" class="text-slate-200">0.0 V</strong></span>
+                    <span>Dòng điện: <strong id="bat-curr" class="text-slate-200">0.0 A</strong></span>
+                </div>
+            </div>
+
+            <!-- Card 3: Nút Điều Khiển -->
+            <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/80 shadow-md flex flex-col justify-between">
+                <div class="flex justify-between items-center mb-2">
+                    <span class="text-sm font-semibold text-cyan-400 uppercase tracking-wider">Điều Khiển Relay / Inverter</span>
+                    <i class="fa-solid fa-toggle-on text-cyan-400 text-xl"></i>
+                </div>
+                <div class="flex items-center justify-between py-2">
+                    <span class="text-sm text-slate-300">Trạng thái Relay:</span>
+                    <button id="btn-toggle" onclick="toggleRelay()" class="px-6 py-2.5 rounded-lg font-bold text-sm transition-all duration-300 bg-rose-600 hover:bg-rose-500 text-white shadow-lg">
+                        TẮT
+                    </button>
+                </div>
+                <p class="text-[11px] text-slate-400 mt-2">Bật/Tắt Relay bảo vệ hoặc chuyển đổi nguồn qua MQTT.</p>
+            </div>
+        </div>
+
+        <!-- Real-time Chart -->
+        <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/80 shadow-md">
+            <h2 class="text-base font-bold text-slate-200 mb-4 flex items-center gap-2">
+                <i class="fa-solid fa-chart-line text-cyan-400"></i> Biểu Đồ Công Suất Theo Thời Gian Real-time
+            </h2>
+            <div class="relative h-72 w-full">
+                <canvas id="powerChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        let currentRelayState = false;
+
+        // Khởi tạo Chart.js
+        const ctx = document.getElementById('powerChart').getContext('2d');
+        const powerChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        label: 'Công suất Pin (PV W)',
+                        data: [],
+                        borderColor: '#f59e0b',
+                        backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                        borderWidth: 2,
+                        tension: 0.3,
+                        fill: true
+                    },
+                    {
+                        label: 'Công suất Sạc Ắc quy (W)',
+                        data: [],
+                        borderColor: '#10b981',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        borderWidth: 2,
+                        tension: 0.3,
+                        fill: true
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+                    y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' }, beginAtZero: true }
+                },
+                plugins: { legend: { labels: { color: '#cbd5e1' } } }
+            }
+        });
+
+        // Kết nối WebSocket thành công
+        socket.on('connect', () => {
+            const badge = document.getElementById('status-badge');
+            document.getElementById('status-dot').className = 'w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse';
+            badge.className = 'flex items-center space-x-2 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+            document.getElementById('status-text').innerText = 'Server Đã Kết Nối';
+        });
+
+        // Nhận dữ liệu thời gian thực từ Python Flask Server
+        socket.on('solar_data_update', (data) => {
+            // Cập nhật giá trị hiển thị
+            document.getElementById('pv-power').innerText = data.pv_power;
+            document.getElementById('pv-volt').innerText = data.pv_voltage + ' V';
+            document.getElementById('pv-curr').innerText = data.pv_current + ' A';
+
+            document.getElementById('bat-power').innerText = data.bat_power;
+            document.getElementById('bat-volt').innerText = data.bat_voltage + ' V';
+            document.getElementById('bat-curr').innerText = data.bat_current + ' A';
+
+            // Cập nhật nút điều khiển
+            currentRelayState = data.relay_status;
+            const btn = document.getElementById('btn-toggle');
+            if(currentRelayState) {
+                btn.innerText = 'BẬT';
+                btn.className = 'px-6 py-2.5 rounded-lg font-bold text-sm bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg';
+            } else {
+                btn.innerText = 'TẮT';
+                btn.className = 'px-6 py-2.5 rounded-lg font-bold text-sm bg-rose-600 hover:bg-rose-500 text-white shadow-lg';
+            }
+
+            // Cập nhật biểu đồ
+            const now = new Date().toLocaleTimeString();
+            if (powerChart.data.labels.length >= 15) {
+                powerChart.data.labels.shift();
+                powerChart.data.datasets[0].data.shift();
+                powerChart.data.datasets[1].data.shift();
+            }
+            powerChart.data.labels.push(now);
+            powerChart.data.datasets[0].data.push(data.pv_power);
+            powerChart.data.datasets[1].data.push(data.bat_power);
+            powerChart.update();
+        });
+
+        // Gửi lệnh bật/tắt Relay
+        function toggleRelay() {
+            socket.emit('control_relay', { status: !currentRelayState });
+        }
+    </script>
+</body>
+</html>
